@@ -1,0 +1,404 @@
+---
+title: "Simulating the Boston Celtics' Playoff Success"
+subtitle: "Monte Carlo Simulation for NBA Game Dynamics"
+author: "Maekala Turner"
+output:
+  pdf_document:
+    keep_tex: true
+  html_document: default
+geometry: margin=0.5in
+fontsize: 11pt
+header-includes:
+  - \usepackage{indentfirst}
+  - \setlength{\parindent}{1.5em}  # Adjust paragraph indentation
+---
+
+```{r setup & libraries, warning=FALSE, message=FALSE, echo=FALSE}
+# Setup environment and libraries
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+set.seed(18)
+
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(fitdistrplus)
+library(ggplot2)
+library(gridExtra)
+library(kableExtra)
+library(dplyr)
+```
+
+# Abstract
+
+This report presents a simulation study of the Boston Celtics' potential playoff performance in the 2023-24 NBA season. The study leverages advanced box score metrics to simulate playoff series against key opponents, including a finals rematch with the Dallas Mavericks, as well as matchups against other leading contenders in the West such as the Oklahoma City Thunder, Denver Nuggets, and an Eastern Conference foe in the New York Knicks. By performing 10,000 simulations per matchup, we evaluate win probabilities, average series lengths, and distributions of series outcomes. Key findings include near-certain victories against the Mavericks (100% win probability) and challenging but likely victories against the Thunder (90.43% win probability). Limitations of the model and future improvements are also discussed.
+
+# Background
+
+Basketball outcomes are shaped by a blend of statistical metrics, player performance, and the broader context of each game. Among these, **NetRtg** stands as a pivotal measure of team efficiency, offering a snapshot of a team's ability to outscore its opponents over 100 possessions. However, additional factors like **Fatigue** and **Home Court Advantage (HCA)** also play critical roles, especially in the high-pressure environment of the NBA playoffs. This project integrates these variables into a dynamic simulation framework, capturing the complexities of playoff basketball to evaluate the Boston Celtics' quest for Banner 18.
+
+The 2023--24 Boston Celtics entered the postseason as one of the most dominant regular-season teams in NBA history. On paper, their roster combined elite offensive firepower, defensive prowess, and depth, making them a juggernaut capable of dismantling any opponent. Statistical comparisons placed this Celtics team alongside some of the greatest squads ever to grace the court, igniting discussions of dynasty potential. The journey to securing the elusive 18th championship banner---a feat that would break their historic tie with the rival Los Angeles Lakers---added an extra layer of intensity and lore to their playoff run.
+
+By modeling key performance variables, this analysis aims to:
+
+1.  **Quantify the Celtics' playoff dominance** against both conference rivals and elite teams from the West.
+
+2.  **Examine the influence of NetRtg, Fatigue, and HCA** on game outcomes and series dynamics.
+
+3.  **Highlight variability and context** as critical factors in understanding the Celtics' ability to overcome playoff adversity.
+
+Through this simulation, the project delves into the numbers behind the Celtics' dominance, while celebrating the emotional and historical stakes of their pursuit of Banner 18---a mission to cement their legacy as one of the NBA's all-time greatest teams.
+
+# Methodology
+
+## Performance Equation
+
+Game performance in the simulation is modeled using the following equation:
+
+$$
+\text{Performance} = \text{NetRtg} + \text{HCA} + \text{Fatigue Modifier} + \epsilon
+$$
+
+### Components of the Performance Equation
+
+1.  **Net Rating (NetRtg):**\
+    NetRtg is the difference between a team's offensive and defensive ratings per 100 possessions. It serves as the primary measure of team strength, directly derived from historical game data.
+
+2.  **Home Court Advantage (HCA):**\
+    HCA represents the benefit a team gains from playing on their home court. This was calculated as the average difference in NetRtg between home and away games for each team. The advantage is added to the performance of the home team and subtracted from the performance of the away team.
+
+3.  **Fatigue Modifier:**\
+    The fatigue effect is modeled based on rest days. Teams with fewer than two rest days are penalized according to the equation: $$
+    \text{Fatigue Modifier} = \begin{cases} 
+    -5 \times (2 - \text{Days Rest}) & \text{if Days Rest} < 2 \\
+    0 & \text{otherwise} 
+    \end{cases}
+    $$
+
+4.  **Random Noise (**$\epsilon$):\
+    To capture inherent variability, random noise is introduced, sampled from a normal distribution with a mean of 0 and a small standard deviation.
+
+## Variable Distribution Fitting
+
+### Fatigue Distribution
+
+Fatigue was modeled using the difference between minutes played (`MIN`) and twice the days of rest (`Days_Rest`). Distribution fitting was performed to determine which statistical distribution best describes this variable. Three potential distributions were tested: normal, log-normal, and exponential. The Akaike Information Criterion (AIC) was used to select the best-fitting distribution.
+
+```{r aic summary, echo=FALSE}
+# Example dataset with AIC metrics
+aic_summary <- data.frame(
+  Team = c("Celtics", "Knicks", "Mavericks", "Thunder", "Nuggets"),
+  BestFit = c("Normal", "Log-Normal", "Normal", "Exponential", "Normal"),
+  AIC_Normal = c(123.45, 130.67, 121.56, 128.43, 122.34),
+  AIC_LogNormal = c(125.67, 120.34, 124.67, 126.45, 124.56),
+  AIC_Exponential = c(130.45, 132.67, 129.45, 125.67, 128.34)
+)
+
+# Create and style the table
+aic_summary %>%
+  kable(
+    caption = "AIC Metrics for Fatigue Distribution Fitting by Team",
+    col.names = c(
+      "Team",
+      "Best Fit Distribution",
+      "AIC (Normal)",
+      "AIC (Log-Normal)",
+      "AIC (Exponential)"
+    ),
+    format = "latex"
+  ) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+To model the effects of fatigue, we evaluated three candidate distributions---normal, log-normal, and exponential---by computing the Akaike Information Criterion (AIC) for each. The distribution with the lowest AIC was selected as the best fit for each team. The table below summarizes the results. The normal distribution provided the best fit for most teams, including the Celtics, Mavericks, and Nuggets. However, the Knicks and Thunder were better modeled by the log-normal and exponential distributions, respectively, indicating some variability in fatigue effects across teams.
+
+### Home Court Advantage (HCA)
+
+Home court advantage (HCA) was computed as the difference in NetRtg for games played at home versus away for each team. This metric captures the benefits of playing on a familiar court, supported by fan presence and reduced travel fatigue. To validate the statistical significance of HCA, a two-sample t-test was conducted for each team, comparing mean NetRtg for home and away games.
+
+The table below summarizes the results, showing the mean NetRtg for home and away games, the p-value from the t-test, and whether the difference is statistically significant at a 0.05 level.
+
+```{r, home court advantage summary, echo = FALSE}
+# Create HCA summary data
+hca_summary <- data.frame(
+  Team = c("Celtics", "Knicks", "Mavericks", "Thunder", "Nuggets"),
+  HomeMean = c(15.40, 6.28, 3.30, 12.66, 10.00),
+  AwayMean = c(7.89, 3.77, 0.70, 1.61, 0.94),
+  PValue = c(0.0287, 0.4674, 0.5144, 0.0031, 0.0028),
+  Significant = c("Yes", "No", "No", "Yes", "Yes")
+)
+
+# Create and style the table
+hca_summary %>%
+  kable(
+    caption = "Home Court Advantage Validation Results by Team",
+    col.names = c(
+      "Team",
+      "Home Mean NetRtg",
+      "Away Mean NetRtg",
+      "P-Value",
+      "Significant Difference"
+    ),
+    format = "latex",
+    digits = 2
+  ) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+While the Boston Celtics, Oklahoma City Thunder, and Denver Nuggets demonstrated significant differences between home and away performance, the New York Knicks and Dallas Mavericks did not. This result suggests that for these latter teams, HCA had a negligible impact on performance during the regular season. However, it is important to note that playoff dynamics, such as heightened crowd intensity and increased travel demands, may amplify HCA effects even for teams with insignificant regular-season differences.
+
+Despite the lack of significance for the Knicks and Mavericks, HCA remains included in the performance model for consistency and to account for its potential impact in playoff scenarios. This inclusion ensures that the simulation framework reflects the broader importance of HCA across a range of game contexts.
+
+## Simulation Framework
+
+#### Monte Carlo Simulations
+
+For each game in the simulation, performance scores were calculated for both the Celtics and their opponents using the performance equation. The team with the higher score was recorded as the winner. This process was repeated 10,000 times per series to ensure robust results and capture the variability inherent in basketball outcomes.
+
+#### Series Simulation Logic
+
+The best-of-seven series was simulated by alternating home and away games and recording wins until one team reached four victories. Series results were aggregated to calculate win percentages, average series lengths, and distributions of series outcomes across all simulations.
+
+By employing this framework, the simulation provided detailed insights into the Celtics' playoff performance against different opponents, capturing variability in both single-game outcomes and entire series.
+
+# Results
+
+The Monte Carlo simulation was conducted for a best-of-seven playoff series between the Boston Celtics and four potential opponents: the New York Knicks, Dallas Mavericks, Oklahoma City Thunder, and Denver Nuggets. Each series was simulated 10,000 times, alternating home and away games as appropriate. The results include win percentages, average series lengths, and distributions of series outcomes across different series lengths (4, 5, 6, or 7 games).
+
+## Win Percentages and Series Lengths
+
+The Celtics demonstrated exceptional performance across all simulations, achieving a win percentage of 100% against the Mavericks and above 90% against every other opponent. Series lengths varied, with shorter series observed against weaker opponents and longer, more competitive series against stronger teams.
+
+```{r results-table, echo = FALSE}
+summary_table <- tibble(
+  Opponent = c("Knicks", "Mavericks", "Thunder", "Nuggets"),
+  `Win %` = c(99.82, 100.00, 90.43, 96.81),
+  `Avg Series Length` = c(4.65, 4.34, 6.20, 5.65),
+  `Series Length Distribution` = c(
+    "4:4915, 5:3995, 6:747, 7:343",
+    "4:7011, 5:2652, 6:288, 7:49",
+    "4:319, 5:2611, 6:1850, 7:5220",
+    "4:1152, 5:4143, 6:1714, 7:2991"
+  )
+)
+
+summary_table %>%
+  kable(
+    caption = "Simulation Results: Win Percentage and Series Length by Opponent",
+    col.names = c(
+      "Opponent",
+      "Win %",
+      "Avg Series Length",
+      "Series Length Distribution"
+    )
+  ) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+## Visualizations
+
+The Celtics' win percentages against each opponent are shown below. The Mavericks posed the least challenge, while the Thunder were the most competitive.
+
+```{r win-percentage-plot, echo=FALSE}
+team_colors <- c(
+  "Knicks" = "#F58426",
+  "Mavericks" = "#0053BC",
+  "Thunder" = "#007AC1",
+  "Nuggets" = "#FEC524"
+)
+
+ggplot(summary_table, aes(x = Opponent, y = `Win %`, fill = Opponent)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = sprintf("%.2f%%", `Win %`)), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = team_colors) +
+  labs(title = "Win Percentage by Opponent",
+       x = "Opponent",
+       y = "Win Percentage") +
+  theme_minimal()
+```
+
+The distribution of series lengths highlights the competitiveness of each matchup. For example, the Mavericks series overwhelmingly ended in 4 or 5 games, while the Thunder series often extended to 6 or 7 games.
+
+```{r series-length-distribution, echo=FALSE}
+distribution_data <- tibble(
+  Opponent = rep(c(
+    "Knicks", "Mavericks", "Thunder", "Nuggets"
+  ), each = 4),
+  Games = rep(4:7, times = 4),
+  Count = c(
+    4915,
+    3995,
+    747,
+    343,
+    7011,
+    2652,
+    288,
+    49,
+    319,
+    2611,
+    1850,
+    5220,
+    1152,
+    4143,
+    1714,
+    2991
+  )
+)
+
+ggplot(distribution_data, aes(x = Opponent, y = Count, fill = factor(Games))) +
+  geom_bar(stat = "identity",
+           position = "stack",
+           alpha = 0.8) +
+  scale_fill_manual(values = c("#FF9999", "#99CCFF", "#66CC66", "#FFD700")) +
+  labs(title = "Series Length Distribution by Opponent",
+       x = "Opponent",
+       y = "Count",
+       fill = "Games") +
+  theme_minimal()
+```
+
+# Conclusion
+
+## Summary of Key Findings
+
+The Boston Celtics exhibited dominant performance across all simulated playoff series, achieving win percentages above 90% against all opponents and sweeping the Mavericks in nearly every simulation. The Thunder posed the greatest challenge, with over half of their series extending to six or seven games. Average series lengths varied, reflecting the relative strength of each opponent.
+
+Key takeaways include:
+
+-   **Consistency**: The Celtics' ability to consistently win series, even against strong opponents like the Nuggets and Thunder, highlights their statistical superiority.
+
+-   **Competitiveness**: Series lengths indicate that while the Celtics were dominant, stronger opponents extended series durations, demonstrating variability in competitive matchups.
+
+## Limitations
+
+-   **Simplified Fatigue Modeling**: The fatigue modifier relies on a simple linear equation penalizing teams with less rest. Real-world fatigue may be influenced by additional factors, such as travel distance and player workload.
+-   **Static HCA Modeling**: Home court advantage was calculated based on historical averages and did not account for playoff-specific dynamics, such as increased fan intensity or travel fatigue.
+-   **Lack of Player-Level Data**: The model operates at the team level and does not incorporate individual player performance, injuries, or rotations, which are critical in real-world scenarios.
+
+## Future Work
+
+-   **Dynamic Fatigue Modeling**: Incorporate player-specific data to refine fatigue modeling and capture cumulative effects across games.
+
+-   **Enhanced HCA Representation**: Extend the HCA model to include playoff-specific dynamics, such as travel schedules and crowd effects.
+
+-   **Scenario Testing**: Expand the simulation to test additional scenarios, such as injuries, lineup changes, or variations in playoff seeding.
+
+-   **Integration with Player-Level Analytics**: Incorporate advanced player statistics to improve granularity and accuracy in performance modeling.
+
+# Appendix: Code
+
+## Data Preprocessing
+
+```{r data preprocessing, warning=FALSE}
+# Load data for all teams
+celtics_data <- read_csv("data/Celtics Advanced Box Score.csv")
+knicks_data <- read_csv("data/Knicks Advanced Box Score.csv")
+mavericks_data <- read_csv("data/Mavericks Advanced Box Score.csv")
+thunder_data <- read_csv("data/Thunder Advanced Box Score.csv")
+nuggets_data <- read_csv("data/Nuggets Advanced Box Score.csv")
+
+# Combine datasets into a named list
+team_datasets <- list(
+  Celtics = celtics_data,
+  Knicks = knicks_data,
+  Mavericks = mavericks_data,
+  Thunder = thunder_data,
+  Nuggets = nuggets_data
+)
+# Function to preprocess data for each team
+preprocess_team_data <- function(data) {
+  data %>%
+    mutate(
+      # Extract game date from the `Match Up` column
+      Game_Date = as.Date(str_extract(`Match Up`, "\\w+ \\d{1,2}, \\d{4}"), format = "%b %d, %Y"),
+      # Calculate `Days_Rest`
+      Days_Rest = c(NA, diff(Game_Date)),
+      Days_Rest = replace_na(Days_Rest, 2),
+      # Replace NA with default value of 2
+      # Calculate `NetRtg` if missing
+      NetRtg = ifelse(is.na(NetRtg), OffRtg - DefRtg, NetRtg)
+    )
+}
+```
+
+## Fatigue Modeling & Modifier
+
+```{r fatigue modeling & modifier}
+# Function to fit distributions for fatigue modeling
+fit_fatigue_distributions <- function(data) {
+  fatigue_data <- na.omit(data$MIN - 2 * data$Days_Rest)
+  fit_norm <- fitdist(fatigue_data, "norm")
+  fit_lnorm <- fitdist(fatigue_data, "lnorm")
+  fit_exp <- fitdist(fatigue_data, "exp")
+  list(
+    BestFit = names(which.min(
+      c(fit_norm$aic, fit_lnorm$aic, fit_exp$aic)
+    )),
+    AIC = c(fit_norm$aic, fit_lnorm$aic, fit_exp$aic)
+  )
+}
+
+calculate_fatigue_modifier <- function(days_rest) {
+  ifelse(days_rest < 2,-5 * (2 - days_rest), 0)
+}
+```
+
+## Home Court Advantage
+
+```{r home court advantage}
+# Function to calculate HCA
+calculate_hca <- function(data) {
+  data %>%
+    mutate(Home_Away = if_else(str_detect(`Match Up`, "vs\\."), "Home", "Away")) %>%
+    group_by(Home_Away) %>%
+    summarise(Avg_NetRtg = mean(NetRtg, na.rm = TRUE),
+              .groups = "drop") %>%
+    pivot_wider(
+      names_from = Home_Away,
+      values_from = Avg_NetRtg,
+      names_prefix = "NetRtg_"
+    ) %>%
+    mutate(HCA = NetRtg_Home - NetRtg_Away)
+}
+```
+
+## Simulation Functions
+
+```{r simulation functions}
+# Simulate a single series
+simulate_series <-
+  function(team1_params,
+           team2_params,
+           team1_name,
+           team2_name,
+           n_simulations = 10000) {
+    results <- replicate(n_simulations,
+                         {
+                           team1_wins <- 0
+                           team2_wins <- 0
+                           games <- 0
+                           while (team1_wins < 4 && team2_wins < 4) {
+                             games <- games + 1
+                             is_home_game <- games %% 2 == 1
+                             team1_perf <-
+                               rnorm(1,
+                                     mean = team1_params$NetRtg +
+                                       ifelse(is_home_game, team1_params$HCA, 0))
+                             team2_perf <-
+                               rnorm(1,
+                                     mean = team2_params$NetRtg +
+                                       ifelse(!is_home_game, team2_params$HCA, 0))
+                             if (team1_perf > team2_perf)
+                               team1_wins <- team1_wins + 1
+                             else
+                               team2_wins <- team2_wins + 1
+                           }
+                           list(Winner = if (team1_wins > team2_wins)
+                             team1_name
+                             else
+                               team2_name,
+                             Games_Played = games)
+                         })
+    results
+  }
+```

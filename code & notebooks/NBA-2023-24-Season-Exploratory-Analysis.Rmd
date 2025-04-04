@@ -1,0 +1,680 @@
+---
+title: "NBA 2023-24 Season Exploratory Analysis"
+author: "Maekala Turner"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Overview: NBA Game Outcome Simulation
+
+The objective of this analysis is to model and simulate NBA game outcomes for the 2023-24 season, focusing on the Boston Celtics. The simulation is based on key performance metrics and incorporates various factors that influence game results. The outcome of each game is determined by comparing the **performance** of the Celtics against their opponent. The core equation driving the simulation is as follows:
+
+$$
+\text{Performance} = \text{NetRtg} - \text{Fatigue} + \text{Rest} + \text{RefereeRandomness} + \text{HomeCourtAdvantage}
+$$
+
+### Components of the Performance Equation:
+
+1.  **Net Rating (NetRtg):**\
+    A team's net rating represents the difference between their offensive and defensive ratings, calculated per 100 possessions. This metric provides a high-level view of the team's overall efficiency.
+
+2.  **Fatigue:**\
+    Fatigue is modeled as a regression-based random variable influenced by minutes played (`MIN`) and days of rest (`Days_Rest`). The regression coefficients ($\alpha$ for `MIN` and $\beta$ for `Days_Rest`) are derived from historical data, ensuring a data-driven representation of fatigue's impact on performance. **Rest** is implicitly accounted for within the `Fatigue` variable through the `Days_Rest` term. This ensures that teams with more rest between games are less fatigued.
+
+3.  **Home Court Advantage:**\
+    Playing at home typically confers an advantage due to factors such as fan support, reduced travel fatigue, and familiarity with the playing environment. This is incorporated into the performance equation as a fixed bonus added to the performance of the home team.
+
+### Game Outcome Decision Rule:
+
+The game outcome is determined by the following rule: $$
+\text{If CelticsPerformance} > \text{OpponentPerformance, then Celtics Win.}
+$$
+
+### Simulation Objectives:
+
+This methodology allows us to: 1. **Simulate game results** for the Boston Celtics across their matchups, accounting for home/away status, rest, and other key variables. 2. **Analyze team performance** under varying conditions, including the effects of fatigue, rest, and randomness. 3. **Provide insights** into the probability of winning under different scenarios.
+
+By incorporating these elements, we aim to create a realistic and statistically sound framework for predicting game outcomes and assessing team performance.
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#setwd("C:/Users/mturner/Documents/ISYE6644/Project")
+```
+
+```{r, libraries}
+# Load libraries
+library(readr)
+library(tidyverse)
+library(fitdistrplus)
+library(tidyverse)
+library(ggplot2)
+library(purrr)
+library(gridExtra)
+library(lubridate)
+library(dplyr)
+library(moments)
+```
+
+```{r, loading_data, warning=FALSE}
+# Load advanced box score data for each team
+celtics_advanced_box <- read_csv("data/Celtics Advanced Box Score.csv")
+knicks_advanced_box <- read_csv("data/Knicks Advanced Box Score.csv")
+mavs_advanced_box <- read_csv("data/Mavericks Advanced Box Score.csv")
+thunder_advanced_box <- read_csv("data/Thunder Advanced Box Score.csv")
+nuggets_advanced_box <- read_csv("data/Nuggets Advanced Box Score.csv")
+
+# Function to calculate Days Rest based on Game Dates
+calculate_days_rest <- function(data) {
+  data %>%
+    # Extract and convert Game Dates
+    mutate(Game_Date = as.Date(str_extract(`Match Up`, "\\w+ \\d{1,2}, \\d{4}"), format = "%b %d, %Y")) %>%
+    arrange(Game_Date) %>%  # Ensure data is sorted by date
+    mutate(Days_Rest = c(NA, diff(Game_Date)),
+           # Calculate difference in days between consecutive games
+           Days_Rest = replace_na(Days_Rest, 2))  # Default rest for the first game
+}
+
+# Apply the function to all team datasets
+team_datasets <- list(
+  Celtics = calculate_days_rest(celtics_advanced_box),
+  Knicks = calculate_days_rest(knicks_advanced_box),
+  Mavericks = calculate_days_rest(mavs_advanced_box),
+  Thunder = calculate_days_rest(thunder_advanced_box),
+  Nuggets = calculate_days_rest(nuggets_advanced_box)
+)
+```
+
+### Net Rating
+
+#### Overview:
+
+Net Rating (NetRtg) is a key performance metric widely used in basketball analytics to evaluate a team's overall efficiency. It is calculated as the difference between a team's Offensive Rating (points scored per 100 possessions) and Defensive Rating (points allowed per 100 possessions). The resulting value provides a comprehensive snapshot of a team's ability to outscore its opponents during a game. NetRtg is an included column in the datasets.
+
+#### Validation:
+
+```{r}
+# Ensure data sources exist and load the Celtics NetRtg
+if (exists("celtics_advanced_box") && "NetRtg" %in% names(celtics_advanced_box)) {
+  celtics_netrtg <- celtics_advanced_box$NetRtg
+} else if (exists("team_datasets") && "Celtics" %in% names(team_datasets) && "NetRtg" %in% names(team_datasets$Celtics)) {
+  celtics_netrtg <- team_datasets$Celtics$NetRtg
+} else {
+  stop("Error: `NetRtg` data not found in `celtics_advanced_box` or `team_datasets`. Please verify your data sources.")
+}
+
+# Load required library
+library(ggplot2)
+
+# Add other team NetRtg data
+mavs_netrtg <- team_datasets$Mavericks$NetRtg
+knicks_netrtg <- team_datasets$Knicks$NetRtg
+nuggets_netrtg <- team_datasets$Nuggets$NetRtg
+thunder_netrtg <- team_datasets$Thunder$NetRtg
+
+# Convert Celtics data to a data frame
+celtics_netrtg_df <- data.frame(net_rating = celtics_netrtg)
+
+# Create the histogram and overlay curves
+netrtg_plot <- ggplot(celtics_netrtg_df, aes(x = net_rating)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "forestgreen", color = "black", alpha = 0.5) +
+  # Celtics curve
+  stat_function(fun = dnorm, args = list(mean = mean(celtics_netrtg, na.rm = TRUE),
+                                         sd = sd(celtics_netrtg, na.rm = TRUE)),
+                color = "darkgreen", size = 1) +
+  # Mavericks curve
+  stat_function(fun = dnorm, args = list(mean = mean(mavs_netrtg, na.rm = TRUE),
+                                         sd = sd(mavs_netrtg, na.rm = TRUE)),
+                color = "dodgerblue4", linetype = "dashed", size = 0.8) +
+  # Knicks curve
+  stat_function(fun = dnorm, args = list(mean = mean(knicks_netrtg, na.rm = TRUE),
+                                         sd = sd(knicks_netrtg, na.rm = TRUE)),
+                color = "darkorange3", linetype = "dashed", size = 0.8) +
+  # Nuggets curve
+  stat_function(fun = dnorm, args = list(mean = mean(nuggets_netrtg, na.rm = TRUE),
+                                         sd = sd(nuggets_netrtg, na.rm = TRUE)),
+                color = "darkgoldenrod4", linetype = "dashed", size = 0.8) +
+  # Thunder curve
+  stat_function(fun = dnorm, args = list(mean = mean(thunder_netrtg, na.rm = TRUE),
+                                         sd = sd(thunder_netrtg, na.rm = TRUE)),
+                color = "steelblue1", linetype = "dashed", size = 0.8) +
+  labs(title = "Net Rating Distributions for Celtics and Other Teams",
+       x = "Net Rating",
+       y = "Density") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) # Center the title
+
+# Display the plot
+print(netrtg_plot)
+
+# Save the plot with smaller height
+ggsave("celtics_netrtg_plot.png", plot = netrtg_plot, width = 8, height = 4)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Function to plot NetRtg distribution with normal curve
+plot_net_rtg_distribution <- function(team_name, dataset) {
+  # Extract NetRtg data and remove NA values
+  net_rtg_data <- na.omit(dataset$NetRtg)
+  
+  # Calculate mean and standard deviation of NetRtg
+  fit_mean <- mean(net_rtg_data)
+  fit_sd <- sd(net_rtg_data)
+  
+  # Generate x values for the normal curve (based on the range of NetRtg data)
+  x_vals <- seq(min(net_rtg_data), max(net_rtg_data), length.out = 100)
+  
+  # Calculate the y values for the normal curve
+  normal_curve <- dnorm(x_vals, mean = fit_mean, sd = fit_sd)
+  
+  # Create the plot
+  ggplot(data.frame(NetRtg = net_rtg_data), aes(x = NetRtg)) +
+    geom_histogram(aes(y = ..density..), bins = 15, fill = "forestgreen", alpha = 0.6, color = "black") +
+    geom_line(data = data.frame(x = x_vals, y = normal_curve), aes(x = x, y = y), color = "darkgreen", size = 1) +
+    labs(
+      title = paste(team_name, "NetRtg Distribution with Normal Curve"),
+      x = "Net Rating (NetRtg)",
+      y = "Density"
+    ) +
+    theme_minimal()
+}
+
+# Plot NetRtg distribution for the Celtics
+plot_net_rtg_distribution("Celtics", team_datasets$Celtics)
+
+# To plot distributions for all teams, loop through the list
+for (team_name in names(team_datasets)) {
+  print(plot_net_rtg_distribution(team_name, team_datasets[[team_name]]))
+}
+```
+
+### Fatigue
+
+#### Overview:
+
+We need to quantify and define fatigue, as it has an especially important role towards the end of the season and through the playoffs. For instance, we could model fatigue as something like: $Fatigue = \alpha (Minutes Played) - \beta(RestDays) + RandomVariability$
+
+#### Calculations:
+
+```{r, fatigue_regression}
+# Function to compute fatigue regression coefficients
+compute_fatigue_regression <- function(team_data) {
+  # Ensure no missing values
+  team_data <- team_data %>% drop_na(MIN, Days_Rest, NetRtg)
+  
+  # Add random variability (if needed for simulation later)
+  set.seed(123)
+  team_data <- team_data %>%
+    mutate(RandomVariability = rnorm(n(), mean = 0, sd = 1))
+  
+  # Perform regression: Fatigue ~ MIN + Days_Rest
+  model <- lm(NetRtg ~ MIN + Days_Rest, data = team_data)
+  
+  # Extract coefficients
+  alpha <- coef(model)["MIN"]
+  beta <- coef(model)["Days_Rest"]
+  
+  # Return model, coefficients, and data
+  list(
+    model = model,
+    alpha = alpha,
+    beta = beta,
+    team_data = team_data
+  )
+}
+
+# Apply regression to all teams
+team_fatigue_results <-
+  lapply(names(team_datasets), function(team_name) {
+    result <- compute_fatigue_regression(team_datasets[[team_name]])
+    result$team_name <-
+      team_name  # Add team name for identification
+    result
+  })
+
+# Extract regression coefficients into a summary data frame
+team_coefficients <- data.frame(
+  Team = sapply(team_fatigue_results, function(res)
+    res$team_name),
+  Alpha = sapply(team_fatigue_results, function(res)
+    res$alpha),
+  Beta = sapply(team_fatigue_results, function(res)
+    res$beta)
+)
+
+# Save regression coefficients
+#write_csv(team_coefficients, "Fatigue_Regression_Coefficients.csv")
+
+# View results
+print(team_coefficients)
+```
+
+#### Validation:
+
+To validate the assumptions of normality for the residuals of fatigue regression models for the five NBA teams: Celtics, Knicks, Mavericks, Thunder, and Nuggets, the Shapiro-Wilk test was applied to assess whether the residuals follow a normal distribution.
+
+```{r, fatigue_validation}
+# Function for residual diagnostics
+validate_regression <- function(model, team_name) {
+  residuals <- resid(model)
+  
+  # Histogram of residuals
+  hist(
+    residuals,
+    breaks = 20,
+    main = paste("Residuals Histogram (", team_name, ")", sep = ""),
+    xlab = "Residuals",
+    col = "blue"
+  )
+  
+  # Q-Q plot to check normality
+  qqnorm(residuals, main = paste("Q-Q Plot (", team_name, ")", sep = ""))
+  qqline(residuals, col = "red")
+  
+  # Perform a Shapiro-Wilk test for normality
+  shapiro_test <- shapiro.test(residuals)
+  print(paste("Shapiro-Wilk Test for ", team_name, ":", sep = ""))
+  print(shapiro_test)
+}
+
+# Validate regression for all teams
+lapply(team_fatigue_results, function(res) {
+  validate_regression(res$model, res$team_name)
+})
+```
+
+The models for the Celtics, Knicks, Mavericks, and Thunder can be used without modifications. After further analysis of the residuals for the Nuggets, the plots support that we can proceed with the normality assumption validated. Overall, the validation process supports the regression-based fatigue calculation as a statistically sound approach for all teams.
+
+#### Results:
+
+```{r, calculate_fatigue}
+# Function to calculate fatigue values
+calculate_fatigue <- function(team_result) {
+  team_result$team_data %>%
+    mutate(Fatigue = team_result$alpha * MIN - team_result$beta * Days_Rest + RandomVariability)
+}
+
+# Compute fatigue for all teams and update the list
+team_data_with_fatigue <-
+  lapply(team_fatigue_results, function(res) {
+    calculate_fatigue(res)
+  })
+
+# Assign team names to the list for easier access
+names(team_data_with_fatigue) <-
+  sapply(team_fatigue_results, function(res)
+    res$team_name)
+
+# Save updated datasets with fatigue values
+lapply(names(team_data_with_fatigue), function(team_name) {
+  write_csv(team_data_with_fatigue[[team_name]],
+            paste0(team_name, "_Fatigue_Values.csv"))
+})
+
+# Verify the content of the list
+print(team_data_with_fatigue)
+```
+
+```{r, fatigue_distribution_plots, warning=FALSE}
+# Function to plot histogram and overlay fitted distributions
+plot_team_distributions <- function(team_name, data) {
+  # Remove NA values
+  data <- na.omit(data)
+  
+  # Fit distributions
+  fit_norm <- fitdist(data, "norm")
+  positive_data <- data[data > 0]  # For positive-only distributions
+  fit_exp <-
+    if (length(positive_data) > 1)
+      fitdist(positive_data, "exp")
+  else
+    NULL
+  fit_weibull <-
+    if (length(positive_data) > 1)
+      fitdist(positive_data, "weibull")
+  else
+    NULL
+  
+  # Create a data frame for the fitted distributions
+  x_vals <- seq(min(data), max(data), length.out = 100)
+  dist_data <- data.frame(
+    x = x_vals,
+    Normal = dnorm(x_vals, mean = fit_norm$estimate["mean"], sd = fit_norm$estimate["sd"]),
+    Exponential = if (!is.null(fit_exp))
+      dexp(x_vals, rate = 1 / fit_exp$estimate["rate"])
+    else
+      NA,
+    Weibull = if (!is.null(fit_weibull))
+      dweibull(
+        x_vals,
+        shape = fit_weibull$estimate["shape"],
+        scale = fit_weibull$estimate["scale"]
+      )
+    else
+      NA
+  )
+  
+  # Convert to long format for ggplot
+  dist_long <- dist_data %>%
+    pivot_longer(cols = -x,
+                 names_to = "Distribution",
+                 values_to = "Density")
+  
+  # Create the plot
+  p <- ggplot() +
+    geom_histogram(
+      data = data.frame(data),
+      aes(x = data, y = ..density..),
+      bins = 15,
+      fill = "blue",
+      alpha = 0.5,
+      color = "black"
+    ) +
+    geom_line(data = dist_long,
+              aes(x = x, y = Density, color = Distribution),
+              size = 1) +
+    labs(
+      title = paste(team_name, "Net Rating Distribution"),
+      x = "Net Rating",
+      y = "Density"
+    ) +
+    theme_minimal() +
+    scale_color_manual(values = c(
+      "Normal" = "red",
+      "Exponential" = "green",
+      "Weibull" = "purple"
+    ))
+  
+  return(p)
+}
+
+# List of team datasets
+teams_data <- list(
+  Celtics = celtics_advanced_box$NetRtg,
+  Knicks = knicks_advanced_box$NetRtg,
+  Mavericks = mavs_advanced_box$NetRtg,
+  Thunder = thunder_advanced_box$NetRtg,
+  Nuggets = nuggets_advanced_box$NetRtg
+)
+
+# Generate plots for each team
+team_plots <- lapply(names(teams_data), function(team) {
+  plot_team_distributions(team, teams_data[[team]])
+})
+
+# Display all plots
+do.call(grid.arrange, c(team_plots, ncol = 2))
+```
+
+```{r, fatigue_distribution_analysis, warning=FALSE}
+# List of team datasets
+teams_data <- list(
+  Celtics = celtics_advanced_box$NetRtg,
+  Knicks = knicks_advanced_box$NetRtg,
+  Mavericks = mavs_advanced_box$NetRtg,
+  Thunder = thunder_advanced_box$NetRtg,
+  Nuggets = nuggets_advanced_box$NetRtg
+)
+
+# Function to determine the best-fitting distribution
+find_best_fit <- function(data) {
+  # Remove NA values and ensure data is numeric
+  data <- na.omit(data)
+  
+  # Fit distributions
+  fit_norm <- fitdist(data, "norm")
+  
+  # Handle positive-only distributions
+  positive_data <- data[data > 0]  # Filter for positive values
+  fit_exp <-
+    if (length(positive_data) > 1)
+      fitdist(positive_data, "exp")
+  else
+    NULL
+  fit_weibull <-
+    if (length(positive_data) > 1)
+      fitdist(positive_data, "weibull")
+  else
+    NULL
+  
+  # Compile AIC values
+  aic_values <- c(
+    Normal = fit_norm$aic,
+    Exponential = if (!is.null(fit_exp))
+      fit_exp$aic
+    else
+      Inf,
+    Weibull = if (!is.null(fit_weibull))
+      fit_weibull$aic
+    else
+      Inf
+  )
+  
+  # Find the distribution with the lowest AIC
+  best_fit <- names(which.min(aic_values))
+  
+  return(list(BestDistribution = best_fit,
+              AIC_Values = aic_values))
+}
+
+# Apply the function to all team datasets
+team_fit_results <- lapply(teams_data, find_best_fit)
+
+# Summarize the best-fitting distributions for all teams
+best_fits <-
+  sapply(team_fit_results, function(x)
+    x$BestDistribution)
+cat("Best-fitting distributions for each team:\n")
+print(best_fits)
+
+# Summarize AIC values for all teams
+aic_table <-
+  do.call(rbind, lapply(team_fit_results, function(x)
+    x$AIC_Values))
+rownames(aic_table) <- names(teams_data)
+cat("\nAIC values for all teams:\n")
+print(aic_table)
+
+# Save results to a CSV file
+write_csv(as_tibble(aic_table, rownames = "Team"),
+          "NetRating_Distribution_AIC_Results.csv")
+```
+
+#### Integration:
+
+Because the difference between exponential and Weibull AIC values for each team is minimal, we can confidently define each of them as exponential for simpler implementation.
+
+```{r, fatigue_distributions_integration}
+# Calculate mean NetRtg for each team
+team_means <- sapply(teams_data, mean, na.rm = TRUE)
+
+# Generate EXPO(mean) strings for Arena
+expo_strings <- sapply(names(team_means), function(team) {
+  paste0("Team: ",
+         team,
+         " | Arena Input: EXPO(",
+         round(team_means[team], 2),
+         ")")
+})
+
+# Print the results
+cat("EXPO(mean) values for Arena:\n")
+cat(paste0(expo_strings, collapse = "\n"))
+```
+
+### Home Court Advantage (HCA)
+
+#### Overview:
+
+Home Court Advantage (HCA) accounts for the additional performance benefits observed during home games. The approach ensures robustness by utilizing historical game data to derive Home and Away Net Ratings. Random variability is introduced to model game-to-game fluctuations, reflecting the inherent uncertainties of game dynamics.
+
+-   **Historical Analysis**: For each team, Home and Away Net Ratings are calculated based on individual game performance data.
+-   **Randomness**: HCA is modeled as a random variable sampled from a normal distribution, defined by:
+    -   **Mean (µ)**: Average Net Rating for Home or Away games.
+    -   **Standard Deviation (σ)**: Variability of Net Rating for Home or Away games.
+-   **Simulation Robustness**: Random sampling ensures the simulation captures real-world dynamics by incorporating variability.
+-   **Statistical Validation:** A two-sample t-test is performed to evaluate if there is a significant difference between Home and Away Net Ratings, providing evidence for the HCA assumption.
+
+The final HCA values for each game are used to adjust team performance in the simulation.
+
+------------------------------------------------------------------------
+
+#### Calculations:
+
+```{r hca_calculations}
+# Function to calculate Home and Away NetRtg differences
+calculate_hca_from_box_scores <- function(data) {
+  data %>%
+    mutate(
+      Home_Away = if_else(str_detect(`Match Up`, "vs\\."), "Home", "Away")
+    ) %>%
+    group_by(Home_Away) %>%
+    summarise(
+      Avg_NetRtg = mean(NetRtg, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    pivot_wider(
+      names_from = Home_Away,
+      values_from = Avg_NetRtg,
+      names_prefix = "NetRtg_"
+    ) %>%
+    mutate(HCA = NetRtg_Home - NetRtg_Away)
+}
+
+# Apply the function to all teams
+hca_results <- lapply(team_datasets, calculate_hca_from_box_scores)
+names(hca_results) <- names(team_datasets)
+
+# Combine results into a single data frame for all teams
+hca_summary <- bind_rows(hca_results, .id = "Team")
+
+# Save the HCA summary as a CSV
+write_csv(hca_summary, "HomeCourtAdvantage_Summary.csv")
+
+# View the HCA summary
+print(hca_summary)
+```
+
+#### Validation:
+
+##### To confirm the robustness of the Home Court Advantage (HCA) calculations, we validate the normality of the distributions for Home and Away Net Ratings. Additionally, we test for significant differences in means using a t-test.
+
+1.  **Visual Validation**:
+
+    -   Density plots for Home and Away Net Ratings are generated for each team. These plots overlay the fitted normal distribution on the actual data.
+
+2.  **Statistical Validation**:
+
+    -   **Normality Tests**: Validate skewness and kurtosis values for the Home and Away distributions.
+
+    -   **t-Test for Difference in Means**: Evaluate whether Home and Away Net Ratings are significantly different.
+
+$H_{0}: \mu_{Home} = \mu_{Away}$
+
+against the alternative:
+
+$H_{a}: \mu_{Home} \neq \mu_{Away}$
+
+```{r}
+# Function to analyze HCA distributions and perform t-tests
+analyze_hca_distributions_with_ttest <- function(data, team_name) {
+  home_data <- data %>% filter(str_detect(`Match Up`, "vs\\.")) %>% pull(NetRtg)
+  away_data <- data %>% filter(str_detect(`Match Up`, "@")) %>% pull(NetRtg)
+  
+  home_data <- na.omit(home_data)
+  away_data <- na.omit(away_data)
+  
+  if (length(home_data) < 2 || length(away_data) < 2) {
+    warning(paste("Insufficient data for", team_name))
+    return(list(Plot = NULL, Stats = NULL))
+  }
+  
+  # Fit distributions for home and away games
+  home_fit <- fitdist(home_data, "norm")
+  away_fit <- fitdist(away_data, "norm")
+  
+  # Perform t-test for difference in means
+  t_test_result <- t.test(home_data, away_data, paired = FALSE)
+  
+  # Calculate additional metrics
+  home_skewness <- round(skewness(home_data), 4)
+  home_kurtosis <- round(kurtosis(home_data), 4)
+  away_skewness <- round(skewness(away_data), 4)
+  away_kurtosis <- round(kurtosis(away_data), 4)
+  
+  # Create a data frame for plotting
+  home_density <- data.frame(
+    x = seq(min(home_data), max(home_data), length.out = 100),
+    Density = dnorm(seq(min(home_data), max(home_data), length.out = 100), 
+                    mean = home_fit$estimate["mean"], 
+                    sd = home_fit$estimate["sd"]),
+    Type = "Home"
+  )
+  
+  away_density <- data.frame(
+    x = seq(min(away_data), max(away_data), length.out = 100),
+    Density = dnorm(seq(min(away_data), max(away_data), length.out = 100), 
+                    mean = away_fit$estimate["mean"], 
+                    sd = away_fit$estimate["sd"]),
+    Type = "Away"
+  )
+  
+  combined_density <- bind_rows(home_density, away_density)
+  
+  # Create the plot
+  plot <- ggplot(combined_density, aes(x = x, y = Density, color = Type)) +
+    geom_line(size = 1) +
+    labs(
+      title = paste(team_name, "NetRtg Distribution: Home vs Away"),
+      x = "NetRtg",
+      y = "Density"
+    ) +
+    theme_minimal() +
+    scale_color_manual(values = c("Home" = "blue", "Away" = "red"))
+  
+  # Return both the plot and the statistical results
+  list(
+    Plot = plot,
+    Stats = data.frame(
+      Team = team_name,
+      Home_Mean = round(home_fit$estimate["mean"], 4),
+      Away_Mean = round(away_fit$estimate["mean"], 4),
+      P_Value = round(t_test_result$p.value, 4),
+      Significant = ifelse(t_test_result$p.value < 0.05, "Yes", "No")
+    )
+  )
+}
+
+# Apply the function to all teams
+hca_analysis_results <- lapply(names(team_datasets), function(team) {
+  analyze_hca_distributions_with_ttest(team_datasets[[team]], team)
+})
+
+# Extract plots and stats
+hca_plots <- lapply(hca_analysis_results, function(res) res$Plot)
+hca_stats <- do.call(rbind, lapply(hca_analysis_results, function(res) res$Stats))
+
+# Save the statistical results as a CSV
+write_csv(hca_stats, "HCA_Distribution_TTest_Stats.csv")
+
+# Display the plots for each team
+library(gridExtra)
+grid.arrange(grobs = hca_plots, ncol = 2)
+
+# Print the statistical summary
+print(hca_stats)
+View(hca_stats)
+```
+
+-   The t-test results indicate significant differences in Home vs. Away Net Ratings for the **Celtics**, **Thunder**, and **Nuggets**, with p-values below 0.05.
+
+-   While the **Knicks** and **Mavericks** do not show statistically significant differences, domain knowledge justifies retaining HCA for all teams:
+
+    -   **Playoff Context**: HCA becomes critical in playoff scenarios, especially Game 7s, where home teams often benefit from fan support and familiarity with the environment.
+
+    -   **Real-World Relevance**: Even small differences in home performance can impact game outcomes significantly.
+
+-   The visualizations confirm that Home and Away Net Ratings are reasonably modeled as normal distributions, aligning with the assumptions used in the simulation.
